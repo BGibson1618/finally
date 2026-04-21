@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
-from fastapi import Request
 
 from .seed_data import DEFAULT_CASH, DEFAULT_USER_ID, DEFAULT_WATCHLIST
 
@@ -91,8 +90,3 @@ class Database:
     async def fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> aiosqlite.Row | None:
         async with self.connection.execute(sql, params) as cursor:
             return await cursor.fetchone()
-
-
-def get_db(request: Request) -> Database:
-    """FastAPI dependency: returns the Database stored on app.state."""
-    return request.app.state.db
