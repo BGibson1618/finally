@@ -50,4 +50,4 @@ async def delete_watchlist(
         await service.remove_ticker(db, ticker, DEFAULT_USER_ID)
     except KeyError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Ticker {ticker} not in watchlist")
-    await source.remove_ticker(ticker.strip().upper())
+    await source.remove_ticker(ticker)
