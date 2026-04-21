@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
+
 import pytest
 
 from app import config
 
 
 @pytest.fixture(autouse=True)
-def _reset_settings_cache():
+def _reset_settings_cache() -> Generator[None, None, None]:
     config.get_settings.cache_clear()
     yield
     config.get_settings.cache_clear()
