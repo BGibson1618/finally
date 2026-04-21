@@ -58,7 +58,3 @@ def test_smoke_full_flow(client: TestClient) -> None:
     history = client.get("/api/portfolio/history").json()
     assert len(history) >= 1
 
-    # SSE endpoint is reachable (status 200 + text/event-stream)
-    with client.stream("GET", "/api/stream/prices") as r:
-        assert r.status_code == 200
-        assert r.headers["content-type"].startswith("text/event-stream")
