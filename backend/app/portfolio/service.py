@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import aiosqlite
+
 from app.db.database import Database
 from app.market import PriceCache
 from app.portfolio.models import PortfolioState, Position, Snapshot, TradeResult
@@ -14,14 +16,14 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _position_from_row(row, price_cache: PriceCache) -> Position:
+def _position_from_row(row: aiosqlite.Row, price_cache: PriceCache) -> Position:
     update = price_cache.get(row["ticker"])
     current_price = update.price if update else None
     market_value = (current_price * row["quantity"]) if current_price is not None else None
     cost_basis = row["quantity"] * row["avg_cost"]
     if market_value is not None:
         pl = market_value - cost_basis
-        pl_pct = (pl / cost_basis * 100) if cost_basis else 0.0
+        pl_pct = (pl / cost_basis * 100) if cost_basis else None
     else:
         pl = None
         pl_pct = None
