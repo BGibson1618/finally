@@ -33,3 +33,32 @@ def test_health(client: TestClient) -> None:
 def test_lifespan_creates_db_file(client: TestClient) -> None:
     db_path = os.environ["FINALLY_DB_PATH"]
     assert Path(db_path).exists()
+
+
+def test_smoke_full_flow(client: TestClient) -> None:
+    # Watchlist is seeded
+    assert client.get("/api/watchlist").status_code == 200
+
+    # Portfolio is the expected starting state
+    state = client.get("/api/portfolio").json()
+    assert state["cash_balance"] == 10_000.0
+
+    # Chat-driven trade
+    chat = client.post("/api/chat", json={"message": "buy 1 AAPL"}).json()
+    assert any(
+        a["kind"] == "trade" and a["status"] == "ok" for a in chat["executed_actions"]
+    )
+
+    # Portfolio reflects the trade
+    state = client.get("/api/portfolio").json()
+    assert state["cash_balance"] < 10_000.0
+    assert any(p["ticker"] == "AAPL" for p in state["positions"])
+
+    # History has at least one snapshot (recorded by the trade path)
+    history = client.get("/api/portfolio/history").json()
+    assert len(history) >= 1
+
+    # SSE endpoint is reachable (status 200 + text/event-stream)
+    with client.stream("GET", "/api/stream/prices") as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
