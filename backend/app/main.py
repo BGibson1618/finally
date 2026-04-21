@@ -8,6 +8,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from app.chat.routes import router as chat_router
 from app.config import get_settings
 from app.db.database import Database
 from app.db.seed_data import DEFAULT_USER_ID
@@ -66,4 +67,5 @@ def create_app() -> FastAPI:
     app.include_router(create_stream_router(cache))
     app.include_router(watchlist_router)
     app.include_router(portfolio_router)
+    app.include_router(chat_router)
     return app
