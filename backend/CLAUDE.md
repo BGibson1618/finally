@@ -57,3 +57,30 @@ uv run --extra dev ruff check app/ tests/ # Lint
 ```bash
 uv run market_data_demo.py   # Live terminal dashboard with simulated prices
 ```
+
+## REST API (Portfolio / Watchlist / Chat)
+
+All endpoints live under `/api/*` and are mounted in `app.main.create_app()`. Shared state (DB, PriceCache, MarketDataSource) is attached to `app.state` in the lifespan handler and read via dependency functions in `app/dependencies.py`.
+
+### Services
+
+- `app/watchlist/service.py` — `list_watchlist`, `add_ticker`, `remove_ticker`
+- `app/portfolio/service.py` — `get_portfolio`, `execute_trade`, `record_snapshot`, `get_snapshots`, plus exception types `TradeError`, `InsufficientFundsError`, `InsufficientSharesError`, `UnknownTickerError`
+- `app/chat/service.py` — `handle_user_message` (builds context, calls LLM, auto-executes trades/watchlist changes, persists conversation)
+
+### LLM Modes
+
+- `LLM_MOCK=true` → `app.chat.llm.call_llm_mock` (regex-based deterministic responses)
+- Otherwise → `app.chat.llm.call_llm` (LiteLLM + OpenRouter + Cerebras, structured output via `LlmResponse`)
+
+### Background Tasks
+
+- `SnapshotTask` in `app/portfolio/snapshots.py` records `portfolio_snapshots` every 30 s.
+- The market data source writes live prices to the shared `PriceCache`.
+
+### Running the server
+
+```bash
+cd backend
+uv run uvicorn app.main:create_app --factory --port 8000
+```
