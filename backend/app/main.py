@@ -47,11 +47,17 @@ def create_app() -> FastAPI:
         await source.start(tickers)
         app.state.market_source = source
 
+        from app.portfolio.snapshots import SnapshotTask
+        snapshot_task = SnapshotTask(db, cache, DEFAULT_USER_ID, interval=30.0)
+        await snapshot_task.start()
+        app.state.snapshot_task = snapshot_task
+
         logger.info("FinAlly backend started with %d tickers", len(tickers))
 
         try:
             yield
         finally:
+            await snapshot_task.stop()
             await source.stop()
             await db.close()
 
