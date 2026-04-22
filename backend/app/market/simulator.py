@@ -240,19 +240,21 @@ class SimulatorDataSource(MarketDataSource):
         logger.info("Simulator stopped")
 
     async def add_ticker(self, ticker: str) -> None:
+        symbol = ticker.strip().upper()
         if self._sim:
-            self._sim.add_ticker(ticker)
+            self._sim.add_ticker(symbol)
             # Seed cache immediately so the ticker has a price right away
-            price = self._sim.get_price(ticker)
+            price = self._sim.get_price(symbol)
             if price is not None:
-                self._cache.update(ticker=ticker, price=price)
-            logger.info("Simulator: added ticker %s", ticker)
+                self._cache.update(ticker=symbol, price=price)
+            logger.info("Simulator: added ticker %s", symbol)
 
     async def remove_ticker(self, ticker: str) -> None:
+        symbol = ticker.strip().upper()
         if self._sim:
-            self._sim.remove_ticker(ticker)
-        self._cache.remove(ticker)
-        logger.info("Simulator: removed ticker %s", ticker)
+            self._sim.remove_ticker(symbol)
+        self._cache.remove(symbol)
+        logger.info("Simulator: removed ticker %s", symbol)
 
     def get_tickers(self) -> list[str]:
         return self._sim.get_tickers() if self._sim else []

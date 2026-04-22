@@ -57,3 +57,39 @@ uv run --extra dev ruff check app/ tests/ # Lint
 ```bash
 uv run market_data_demo.py   # Live terminal dashboard with simulated prices
 ```
+
+## REST API (Portfolio / Watchlist / Chat)
+
+All endpoints live under `/api/*` and are mounted in `app.main.create_app()`. Shared state (DB, PriceCache, MarketDataSource) is attached to `app.state` in the lifespan handler and read via dependency functions in `app/dependencies.py`.
+
+### Services
+
+- `app/watchlist/service.py` — `list_watchlist`, `add_ticker`, `remove_ticker`
+- `app/portfolio/service.py` — `get_portfolio`, `execute_trade`, `record_snapshot`, `get_snapshots`, plus exception types `TradeError`, `InsufficientFundsError`, `InsufficientSharesError`, `UnknownTickerError`
+- `app/chat/service.py` — `handle_user_message` (two-turn confirmation: LLM proposes, user confirms on the next turn, then server executes)
+
+### Chat: Two-Turn Confirmation
+
+Actions (trades, watchlist changes) never execute on the LLM turn. The flow is stateless — the client holds the pending actions between turns:
+
+1. **Propose turn** — client POSTs `{ "message": "..." }`. The server calls the LLM, converts any suggested trades/watchlist changes into `proposed_actions`, persists the exchange, and returns `{ message, proposed_actions, executed_actions: [] }`.
+2. **Confirm turn** — client POSTs `{ "message": "confirm", "confirm_actions": <proposed_actions from step 1> }`. The server skips the LLM entirely, executes each action, and returns `{ message, proposed_actions: [], executed_actions }`. Sending a new message without `confirm_actions` implicitly cancels the pending proposal.
+
+Types live in `app/chat/models.py`: `ProposedAction` is a discriminated union over `ProposedTrade` (`kind="trade"`) and `ProposedWatchlistChange` (`kind="watchlist_add" | "watchlist_remove"`). `ExecutedAction` records `status` (`"ok"` or `"error"`) plus an optional `error` message.
+
+### LLM Modes
+
+- `LLM_MOCK=true` → `app.chat.llm.call_llm_mock` (regex-based deterministic responses; used by tests)
+- Otherwise → `app.chat.llm.call_llm` (LiteLLM + OpenRouter + Cerebras, structured output via `LlmResponse`, 30 s timeout)
+
+### Background Tasks
+
+- `SnapshotTask` in `app/portfolio/snapshots.py` records `portfolio_snapshots` every 30 s.
+- The market data source writes live prices to the shared `PriceCache`.
+
+### Running the server
+
+```bash
+cd backend
+uv run uvicorn app.main:create_app --factory --port 8000
+```
