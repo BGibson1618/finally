@@ -1,10 +1,12 @@
 # Backend Implementation Plan
 
+> **Historical note:** The backend has already been implemented, and some chat-flow details in this document are now superseded. For the current contract, use `planning/PLAN.md` and `planning/2026-04-21-frontend-implementation.md`: chat actions are confirmation-based (`proposed_actions` first, `executed_actions` only after confirm), not auto-executed on the initial LLM turn.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Complete the FinAlly backend by building the database layer, FastAPI application, portfolio/watchlist/chat endpoints, background tasks, and LLM integration — producing a fully functional API surface that the frontend can integrate against.
 
-**Architecture:** A FastAPI application wired via an async `lifespan` that initializes a lazy-seeded SQLite database (via `aiosqlite`) and a shared `PriceCache` fed by the existing `MarketDataSource`. Routers expose REST endpoints under `/api/*` and the pre-built SSE streamer under `/api/stream/*`. A chat router calls an LLM (LiteLLM → OpenRouter → Cerebras with structured outputs) and auto-executes trades/watchlist changes through the same services used by the REST endpoints. A background task periodically records portfolio value snapshots for the P&L chart.
+**Architecture:** A FastAPI application wired via an async `lifespan` that initializes a lazy-seeded SQLite database (via `aiosqlite`) and a shared `PriceCache` fed by the existing `MarketDataSource`. Routers expose REST endpoints under `/api/*` and the pre-built SSE streamer under `/api/stream/*`. A chat router calls an LLM (LiteLLM → OpenRouter → Cerebras with structured outputs), returns proposed actions to the client, and executes them only after a later confirmation turn. A background task periodically records portfolio value snapshots for the P&L chart.
 
 **Tech Stack:** Python 3.12, FastAPI, uvicorn, uv, aiosqlite, python-dotenv, litellm, pydantic, pytest, pytest-asyncio.
 
@@ -3017,7 +3019,7 @@ All endpoints live under `/api/*` and are mounted in `app.main.create_app()`. Sh
 
 - `app/watchlist/service.py` — `list_watchlist`, `add_ticker`, `remove_ticker`
 - `app/portfolio/service.py` — `get_portfolio`, `execute_trade`, `record_snapshot`, `get_snapshots`, plus exception types `TradeError`, `InsufficientFundsError`, `InsufficientSharesError`, `UnknownTickerError`
-- `app/chat/service.py` — `handle_user_message` (builds context, calls LLM, auto-executes trades/watchlist changes, persists conversation)
+- `app/chat/service.py` — `handle_user_message` (builds context, calls LLM, returns proposed actions, executes only on confirmation, persists conversation)
 
 ### LLM Modes
 

@@ -4,7 +4,7 @@
 
 ## 1. Vision
 
-FinAlly (Finance Ally) is a visually stunning AI-powered trading workstation that streams live market data, lets users trade a simulated portfolio, and integrates an LLM chat assistant that can analyze positions and execute trades on the user's behalf. It looks and feels like a modern Bloomberg terminal with an AI copilot.
+FinAlly (Finance Ally) is a visually stunning AI-powered trading workstation that streams live market data, lets users trade a simulated portfolio, and integrates an LLM chat assistant that can analyze positions, propose actions, and execute them after user confirmation. It looks and feels like a modern Bloomberg terminal with an AI copilot.
 
 This is the capstone project for an agentic AI coding course. It is built entirely by Coding Agents demonstrating how orchestrated AI agents can produce a production-quality full-stack application. Agents interact through files in `planning/`.
 
@@ -27,21 +27,27 @@ The user runs a single Docker command (or a provided start script). A browser op
 - **Buy and sell shares** — market orders only, instant fill at current price, no fees, no confirmation dialog
 - **Monitor their portfolio** — a heatmap (treemap) showing positions sized by weight and colored by P&L, plus a P&L chart tracking total portfolio value over time
 - **View a positions table** — ticker, quantity, average cost, current price, unrealized P&L, % change
-- **Chat with the AI assistant** — ask about their portfolio, get analysis, and have the AI execute trades and manage the watchlist through natural language
+- **Chat with the AI assistant** — ask about their portfolio, get analysis, review proposed trades or watchlist changes, and confirm execution inline
 - **Manage the watchlist** — add/remove tickers manually or via the AI chat
 
 ### Visual Design
 
-- **Dark theme**: backgrounds around `#0d1117` or `#1a1a2e`, muted gray borders, no pure black
-- **Price flash animations**: brief green/red background highlight on price change, fading over ~500ms via CSS transitions
+The source of truth for frontend visual design is `planning/2026-04-21-frontend-implementation.md` under **Aesthetic Charter**. In brief:
+
+- **Neo-Bloomberg Amber CRT**: amber-on-near-black terminal styling with 1px hard borders, zero radius, and dense information layout
+- **Price flash animations**: brief green/red background highlight on price change, fading over ~450-500ms
 - **Connection status indicator**: a small colored dot (green = connected, yellow = reconnecting, red = disconnected) visible in the header
 - **Professional, data-dense layout**: inspired by Bloomberg/trading terminals — every pixel earns its place
 - **Responsive but desktop-first**: optimized for wide screens, functional on tablet
 
 ### Color Scheme
-- Accent Yellow: `#ecad0a`
-- Blue Primary: `#209dd7`
-- Purple Secondary: `#753991` (submit buttons)
+- Void / page background: `#0a0a0a`
+- Panel background: `#101010`
+- Primary amber: `#ecad0a`
+- Accent blue: `#209dd7`
+- Accent purple: `#753991`
+
+If this document and the frontend implementation plan disagree on visual details, the frontend implementation plan wins until a later design revision is approved.
 
 ## 3. Architecture Overview
 
@@ -176,7 +182,7 @@ Both the simulator and the Massive client implement the same abstract interface.
 - Endpoint: `GET /api/stream/prices`
 - Long-lived SSE connection; client uses native `EventSource` API
 - Server pushes price updates for all tickers known to the system at a regular cadence (~500ms) — in the single-user model this is equivalent to the user's watchlist
-- Each SSE event contains ticker, price, previous price, timestamp, and change direction
+- Each SSE event contains a JSON object keyed by ticker; each value contains `ticker`, `price`, `previous_price`, `timestamp`, `change`, `change_percent`, and `direction`
 - Client handles reconnection automatically (EventSource has built-in retry)
 
 ---
@@ -270,7 +276,7 @@ All tables include a `user_id` column defaulting to `"default"`. This is hardcod
 ### Chat
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/chat` | Send a message, receive complete JSON response (message + executed actions) |
+| POST | `/api/chat` | Send a message and receive either `proposed_actions` or `executed_actions` in a complete JSON response |
 
 ### System
 | Method | Path | Description |
@@ -294,9 +300,10 @@ When the user sends a chat message, the backend:
 3. Constructs a prompt with a system message, portfolio context, conversation history, and the user's new message
 4. Calls the LLM via LiteLLM → OpenRouter, requesting structured output, using the cerebras-inference skill
 5. Parses the complete structured JSON response
-6. Auto-executes any trades or watchlist changes specified in the response
-7. Stores the message and executed actions in `chat_messages`
+6. Converts any suggested trades or watchlist changes into `proposed_actions`
+7. Stores the message in `chat_messages`
 8. Returns the complete JSON response to the frontend (no token-by-token streaming — Cerebras inference is fast enough that a loading indicator is sufficient)
+9. If the user confirms on a later turn by POSTing `confirm_actions`, the backend skips the LLM, executes those actions, stores the results, and returns `executed_actions`
 
 ### Structured Output Schema
 
@@ -315,24 +322,26 @@ The LLM is instructed to respond with JSON matching this schema:
 ```
 
 - `message` (required): The conversational text shown to the user
-- `trades` (optional): Array of trades to auto-execute. Each trade goes through the same validation as manual trades (sufficient cash for buys, sufficient shares for sells)
-- `watchlist_changes` (optional): Array of watchlist modifications
+- `trades` (optional): Array of trades to propose. Each trade goes through the same validation as manual trades if the user later confirms it
+- `watchlist_changes` (optional): Array of watchlist modifications to propose
 
-### Auto-Execution
+### Confirmation Flow
 
-Trades specified by the LLM execute automatically — no confirmation dialog. This is a deliberate design choice:
-- It's a simulated environment with fake money, so the stakes are zero
-- It creates an impressive, fluid demo experience
-- It demonstrates agentic AI capabilities — the core theme of the course
+Chat-driven actions require explicit confirmation before execution. The flow is:
 
-If a trade fails validation (e.g., insufficient cash), the error is included in the chat response so the LLM can inform the user.
+1. **Proposal turn** — client POSTs `{ "message": "buy 10 AAPL" }`; server returns `{ message, proposed_actions, executed_actions: [] }`
+2. **Confirm turn** — client POSTs `{ "message": "confirm", "confirm_actions": <proposed_actions> }`; server executes the actions and returns `{ message, proposed_actions: [], executed_actions }`
+3. **Cancel** — if the user declines or sends a different message instead, the frontend discards the pending proposal and nothing executes
+
+If a confirmed trade fails validation (e.g. insufficient cash), the failure is returned in `executed_actions` so the UI can show the result inline.
 
 ### System Prompt Guidance
 
 The LLM should be prompted as "FinAlly, an AI trading assistant" with instructions to:
 - Analyze portfolio composition, risk concentration, and P&L
 - Suggest trades with reasoning
-- Execute trades when the user asks or agrees
+- Propose trades when the user asks
+- Execute trades only after the user explicitly confirms
 - Manage the watchlist proactively
 - Be concise and data-driven in responses
 - Always respond with valid structured JSON
@@ -452,5 +461,5 @@ The container is designed to deploy to AWS App Runner, Render, or any container 
 - Buy shares: cash decreases, position appears, portfolio updates
 - Sell shares: cash increases, position updates or disappears
 - Portfolio visualization: heatmap renders with correct colors, P&L chart has data points
-- AI chat (mocked): send a message, receive a response, trade execution appears inline
+- AI chat (mocked): send a message, receive a proposal inline, confirm it, then verify execution appears inline
 - SSE resilience: disconnect and verify reconnection
