@@ -25,8 +25,11 @@ class PortfolioState(BaseModel):
     positions: list[Position]
 
 
+TICKER_PATTERN = r"^[A-Za-z]{1,6}$"
+
+
 class TradeRequest(BaseModel):
-    ticker: str = Field(min_length=1, max_length=16)
+    ticker: str = Field(min_length=1, max_length=6, pattern=TICKER_PATTERN)
     side: Literal["buy", "sell"]
     quantity: float = Field(gt=0)
 

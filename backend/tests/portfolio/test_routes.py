@@ -50,11 +50,20 @@ def test_sell_more_than_owned_returns_400(client: TestClient) -> None:
 
 
 def test_buy_unknown_ticker_returns_400(client: TestClient) -> None:
+    # Valid-format but not in the price cache.
     r = client.post(
         "/api/portfolio/trade",
-        json={"ticker": "DOESNOTEXIST", "side": "buy", "quantity": 1.0},
+        json={"ticker": "ZZZZ", "side": "buy", "quantity": 1.0},
     )
     assert r.status_code == 400
+
+
+def test_buy_invalid_ticker_format_returns_422(client: TestClient) -> None:
+    r = client.post(
+        "/api/portfolio/trade",
+        json={"ticker": "AAPL123", "side": "buy", "quantity": 1.0},
+    )
+    assert r.status_code == 422
 
 
 def test_history_starts_empty(client: TestClient) -> None:

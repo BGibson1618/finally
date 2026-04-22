@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import aiosqlite
 
@@ -28,6 +30,9 @@ class Database:
     def __init__(self, path: str) -> None:
         self._path = path
         self._conn: aiosqlite.Connection | None = None
+        # Serializes transactions on the single shared connection: BEGIN/COMMIT
+        # spans multiple awaits and SQLite can't nest transactions on one conn.
+        self._tx_lock = asyncio.Lock()
 
     @property
     def path(self) -> str:
@@ -82,6 +87,23 @@ class Database:
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         await self.connection.execute(sql, params)
         await self.connection.commit()
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[aiosqlite.Connection]:
+        """Run a block of statements as a single atomic transaction.
+
+        Serialized by an asyncio.Lock: only one transaction at a time on the
+        shared connection. Commits on clean exit, rolls back on exception.
+        """
+        async with self._tx_lock:
+            await self.connection.execute("BEGIN IMMEDIATE")
+            try:
+                yield self.connection
+            except BaseException:
+                await self.connection.rollback()
+                raise
+            else:
+                await self.connection.commit()
 
     async def fetchall(self, sql: str, params: tuple[Any, ...] = ()) -> list[aiosqlite.Row]:
         async with self.connection.execute(sql, params) as cursor:

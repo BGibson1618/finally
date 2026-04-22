@@ -66,12 +66,21 @@ All endpoints live under `/api/*` and are mounted in `app.main.create_app()`. Sh
 
 - `app/watchlist/service.py` — `list_watchlist`, `add_ticker`, `remove_ticker`
 - `app/portfolio/service.py` — `get_portfolio`, `execute_trade`, `record_snapshot`, `get_snapshots`, plus exception types `TradeError`, `InsufficientFundsError`, `InsufficientSharesError`, `UnknownTickerError`
-- `app/chat/service.py` — `handle_user_message` (builds context, calls LLM, auto-executes trades/watchlist changes, persists conversation)
+- `app/chat/service.py` — `handle_user_message` (two-turn confirmation: LLM proposes, user confirms on the next turn, then server executes)
+
+### Chat: Two-Turn Confirmation
+
+Actions (trades, watchlist changes) never execute on the LLM turn. The flow is stateless — the client holds the pending actions between turns:
+
+1. **Propose turn** — client POSTs `{ "message": "..." }`. The server calls the LLM, converts any suggested trades/watchlist changes into `proposed_actions`, persists the exchange, and returns `{ message, proposed_actions, executed_actions: [] }`.
+2. **Confirm turn** — client POSTs `{ "message": "confirm", "confirm_actions": <proposed_actions from step 1> }`. The server skips the LLM entirely, executes each action, and returns `{ message, proposed_actions: [], executed_actions }`. Sending a new message without `confirm_actions` implicitly cancels the pending proposal.
+
+Types live in `app/chat/models.py`: `ProposedAction` is a discriminated union over `ProposedTrade` (`kind="trade"`) and `ProposedWatchlistChange` (`kind="watchlist_add" | "watchlist_remove"`). `ExecutedAction` records `status` (`"ok"` or `"error"`) plus an optional `error` message.
 
 ### LLM Modes
 
-- `LLM_MOCK=true` → `app.chat.llm.call_llm_mock` (regex-based deterministic responses)
-- Otherwise → `app.chat.llm.call_llm` (LiteLLM + OpenRouter + Cerebras, structured output via `LlmResponse`)
+- `LLM_MOCK=true` → `app.chat.llm.call_llm_mock` (regex-based deterministic responses; used by tests)
+- Otherwise → `app.chat.llm.call_llm` (LiteLLM + OpenRouter + Cerebras, structured output via `LlmResponse`, 30 s timeout)
 
 ### Background Tasks
 

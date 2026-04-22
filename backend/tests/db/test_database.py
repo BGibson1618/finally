@@ -84,3 +84,54 @@ async def test_row_factory_returns_mappings(db: Database) -> None:
     assert row is not None
     # aiosqlite.Row supports index AND key access
     assert row["cash_balance"] == DEFAULT_CASH
+
+
+async def test_transaction_commits_on_success(db: Database) -> None:
+    async with db.transaction() as conn:
+        await conn.execute(
+            "UPDATE users_profile SET cash_balance = 42 WHERE id = ?",
+            (DEFAULT_USER_ID,),
+        )
+    row = await db.fetchone(
+        "SELECT cash_balance FROM users_profile WHERE id = ?", (DEFAULT_USER_ID,)
+    )
+    assert row["cash_balance"] == 42
+
+
+async def test_transaction_rolls_back_on_exception(db: Database) -> None:
+    with pytest.raises(RuntimeError):
+        async with db.transaction() as conn:
+            await conn.execute(
+                "UPDATE users_profile SET cash_balance = 42 WHERE id = ?",
+                (DEFAULT_USER_ID,),
+            )
+            raise RuntimeError("boom")
+    row = await db.fetchone(
+        "SELECT cash_balance FROM users_profile WHERE id = ?", (DEFAULT_USER_ID,)
+    )
+    assert row["cash_balance"] == DEFAULT_CASH
+
+
+async def test_transaction_serializes_concurrent_callers(db: Database) -> None:
+    """Two concurrent transactions must not interleave on the shared connection."""
+    import asyncio
+
+    async def increment_by(n: float) -> None:
+        async with db.transaction() as conn:
+            cursor = await conn.execute(
+                "SELECT cash_balance FROM users_profile WHERE id = ?",
+                (DEFAULT_USER_ID,),
+            )
+            row = await cursor.fetchone()
+            # Yield to the event loop to maximize interleaving opportunity.
+            await asyncio.sleep(0)
+            await conn.execute(
+                "UPDATE users_profile SET cash_balance = ? WHERE id = ?",
+                (row["cash_balance"] + n, DEFAULT_USER_ID),
+            )
+
+    await asyncio.gather(increment_by(1.0), increment_by(2.0), increment_by(3.0))
+    row = await db.fetchone(
+        "SELECT cash_balance FROM users_profile WHERE id = ?", (DEFAULT_USER_ID,)
+    )
+    assert row["cash_balance"] == DEFAULT_CASH + 6.0

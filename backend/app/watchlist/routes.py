@@ -9,13 +9,14 @@ from app.db.database import Database
 from app.db.seed_data import DEFAULT_USER_ID
 from app.dependencies import get_db, get_market_source, get_price_cache
 from app.market import MarketDataSource, PriceCache
+from app.portfolio.models import TICKER_PATTERN
 from app.watchlist import service
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
 
 
 class TickerRequest(BaseModel):
-    ticker: str = Field(max_length=16)
+    ticker: str = Field(min_length=1, max_length=6, pattern=TICKER_PATTERN)
 
 
 @router.get("")
@@ -46,8 +47,9 @@ async def delete_watchlist(
     db: Database = Depends(get_db),
     source: MarketDataSource = Depends(get_market_source),
 ) -> None:
+    symbol = ticker.strip().upper()
     try:
-        await service.remove_ticker(db, ticker, DEFAULT_USER_ID)
+        await service.remove_ticker(db, symbol, DEFAULT_USER_ID)
     except KeyError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Ticker {ticker} not in watchlist")
-    await source.remove_ticker(ticker)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Ticker {symbol} not in watchlist")
+    await source.remove_ticker(symbol)

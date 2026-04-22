@@ -22,5 +22,10 @@ async def chat(
     source: MarketDataSource = Depends(get_market_source),
 ) -> ChatResponse:
     return await service.handle_user_message(
-        db, cache, source, DEFAULT_USER_ID, body.message
+        db,
+        cache,
+        source,
+        DEFAULT_USER_ID,
+        body.message,
+        confirm_actions=body.confirm_actions,
     )

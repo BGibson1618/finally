@@ -178,3 +178,57 @@ async def test_get_snapshots_returns_in_order(db: Database, price_cache: PriceCa
     snaps = await service.get_snapshots(db, DEFAULT_USER_ID, limit=10)
     assert len(snaps) == 2
     assert snaps[0].recorded_at <= snaps[1].recorded_at
+
+
+async def test_concurrent_buys_cannot_double_spend(
+    db: Database, price_cache: PriceCache
+) -> None:
+    """Two concurrent buys that each fit the balance but together exceed it
+    must not both succeed. Guards against the read-check-write race."""
+    import asyncio
+
+    # AAPL @ 190 * 30 = 5700. Two concurrent 30-share buys = 11,400 > 10,000.
+    results = await asyncio.gather(
+        service.execute_trade(db, price_cache, DEFAULT_USER_ID, "AAPL", "buy", 30.0),
+        service.execute_trade(db, price_cache, DEFAULT_USER_ID, "AAPL", "buy", 30.0),
+        return_exceptions=True,
+    )
+    successes = [r for r in results if not isinstance(r, Exception)]
+    failures = [r for r in results if isinstance(r, service.InsufficientFundsError)]
+    assert len(successes) == 1
+    assert len(failures) == 1
+
+    state = await service.get_portfolio(db, price_cache, DEFAULT_USER_ID)
+    assert state.cash_balance >= 0
+    assert state.cash_balance == pytest.approx(10_000.0 - 190.0 * 30.0)
+    assert state.positions[0].quantity == 30.0
+
+
+async def test_trade_is_atomic_on_insert_failure(
+    db: Database, price_cache: PriceCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the trades INSERT fails, cash and positions must be rolled back."""
+    import uuid as _uuid
+
+    calls = {"n": 0}
+    real_uuid4 = _uuid.uuid4
+
+    def fake_uuid4():
+        calls["n"] += 1
+        # First uuid is for the positions INSERT; second is for the trades INSERT.
+        if calls["n"] == 2:
+            raise RuntimeError("simulated failure at trades insert")
+        return real_uuid4()
+
+    monkeypatch.setattr("app.portfolio.service.uuid.uuid4", fake_uuid4)
+
+    with pytest.raises(RuntimeError):
+        await service.execute_trade(
+            db, price_cache, DEFAULT_USER_ID, "AAPL", "buy", 1.0
+        )
+
+    state = await service.get_portfolio(db, price_cache, DEFAULT_USER_ID)
+    assert state.cash_balance == 10_000.0
+    assert state.positions == []
+    trades = await db.fetchall("SELECT id FROM trades")
+    assert trades == []

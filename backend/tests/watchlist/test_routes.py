@@ -38,9 +38,15 @@ def test_add_watchlist_entry(client: TestClient) -> None:
     assert "PYPL" in tickers
 
 
-def test_add_watchlist_empty_ticker_returns_400(client: TestClient) -> None:
+def test_add_watchlist_empty_ticker_returns_422(client: TestClient) -> None:
+    # Pydantic rejects min_length=1 violations before the handler runs.
     r = client.post("/api/watchlist", json={"ticker": ""})
-    assert r.status_code == 400
+    assert r.status_code == 422
+
+
+def test_add_watchlist_invalid_ticker_format_returns_422(client: TestClient) -> None:
+    r = client.post("/api/watchlist", json={"ticker": "AAPL123"})
+    assert r.status_code == 422
 
 
 def test_delete_watchlist_entry(client: TestClient) -> None:

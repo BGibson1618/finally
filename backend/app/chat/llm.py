@@ -14,14 +14,19 @@ from app.chat.models import LlmResponse, LlmTrade, LlmWatchlistChange
 logger = logging.getLogger(__name__)
 
 MODEL = "openrouter/openai/gpt-oss-120b"
+# Cap LLM round-trips so a stuck Cerebras call can't block a chat request forever.
+LLM_TIMEOUT_SECONDS = 30.0
 SYSTEM_PROMPT = """You are FinAlly, an AI trading assistant embedded in a simulated portfolio workstation.
-You can analyze the user's positions, suggest trades, and execute trades and watchlist changes on their behalf.
+You can analyze the user's positions and suggest trades and watchlist changes. Suggestions are
+presented to the user for explicit confirmation before anything runs — you do not execute actions.
 
 Rules:
 - Respond ONLY with a JSON object that matches the schema provided.
-- The "message" field is required and holds your conversational reply.
-- Populate "trades" only when the user explicitly asks you to trade or agrees to a suggestion.
-- Populate "watchlist_changes" only when the user asks to add/remove a ticker.
+- The "message" field is required. If you're suggesting trades or watchlist changes, briefly
+  describe them and ask the user to confirm or cancel.
+- Populate "trades" with the specific trades you want to propose. The user will confirm or
+  cancel before anything executes.
+- Populate "watchlist_changes" the same way for add/remove suggestions.
 - Be concise, data-driven, and ground every suggestion in the portfolio context provided."""
 
 
@@ -46,6 +51,7 @@ async def call_llm(
         model=MODEL,
         messages=messages,
         api_key=api_key,
+        timeout=LLM_TIMEOUT_SECONDS,
         response_format={
             "type": "json_schema",
             "json_schema": {

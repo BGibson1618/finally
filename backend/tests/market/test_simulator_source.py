@@ -136,3 +136,19 @@ class TestSimulatorDataSource:
         # Just verify it starts and stops cleanly
         await asyncio.sleep(0.2)
         await source.stop()
+
+    async def test_add_remove_normalize_case(self):
+        """Mixed-case input to add/remove must land on the upper-cased symbol."""
+        cache = PriceCache()
+        source = SimulatorDataSource(price_cache=cache, update_interval=0.1)
+        await source.start([])
+
+        await source.add_ticker("aapl")
+        assert "AAPL" in source.get_tickers()
+        assert cache.get("AAPL") is not None
+
+        await source.remove_ticker("aapl")
+        assert "AAPL" not in source.get_tickers()
+        assert cache.get("AAPL") is None
+
+        await source.stop()

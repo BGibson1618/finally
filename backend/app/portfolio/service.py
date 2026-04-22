@@ -92,6 +92,10 @@ async def execute_trade(
 ) -> TradeResult:
     """Execute a market buy or sell at the current cache price.
 
+    Cash/position updates and the trade row are written in a single DB
+    transaction. The cash (buy) and share (sell) checks use atomic
+    conditional UPDATEs so concurrent trades can't race past a stale read.
+
     Raises:
         ValueError: if quantity <= 0 or side is invalid
         UnknownTickerError: no price available for the ticker
@@ -108,46 +112,58 @@ async def execute_trade(
     if update is None:
         raise UnknownTickerError(f"no price for {symbol}")
     price = update.price
-
-    cash = await get_cash_balance(db, user_id)
-    position_row = await db.fetchone(
-        "SELECT id, quantity, avg_cost FROM positions WHERE user_id = ? AND ticker = ?",
-        (user_id, symbol),
-    )
-
-    if side == "buy":
-        cost = price * quantity
-        if cost > cash:
-            raise InsufficientFundsError(f"needs {cost:.2f}, have {cash:.2f}")
-        await _apply_buy(db, user_id, symbol, quantity, price, position_row)
-    else:  # sell
-        owned = position_row["quantity"] if position_row else 0.0
-        if quantity > owned:
-            raise InsufficientSharesError(f"owns {owned}, tried to sell {quantity}")
-        await _apply_sell(db, user_id, symbol, quantity, price, position_row)
-
     now = _utc_iso()
-    await db.execute(
-        "INSERT INTO trades (id, user_id, ticker, side, quantity, price, executed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (str(uuid.uuid4()), user_id, symbol, side, quantity, price, now),
-    )
+
+    async with db.transaction() as conn:
+        if side == "buy":
+            await _apply_buy(conn, user_id, symbol, quantity, price, now)
+        else:
+            await _apply_sell(conn, user_id, symbol, quantity, price, now)
+
+        await conn.execute(
+            "INSERT INTO trades (id, user_id, ticker, side, quantity, price, executed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), user_id, symbol, side, quantity, price, now),
+        )
+
     return TradeResult(
         ticker=symbol, side=side, quantity=quantity, price=price, executed_at=now
     )
 
 
 async def _apply_buy(
-    db: Database, user_id: str, ticker: str, qty: float, price: float, position_row
+    conn: aiosqlite.Connection,
+    user_id: str,
+    ticker: str,
+    qty: float,
+    price: float,
+    now: str,
 ) -> None:
-    now = _utc_iso()
-    proceeds = price * qty
-    await db.execute(
-        "UPDATE users_profile SET cash_balance = cash_balance - ? WHERE id = ?",
-        (proceeds, user_id),
+    cost = price * qty
+    cursor = await conn.execute(
+        "UPDATE users_profile SET cash_balance = cash_balance - ? "
+        "WHERE id = ? AND cash_balance >= ?",
+        (cost, user_id, cost),
     )
+    if cursor.rowcount == 0:
+        cash_row = await (
+            await conn.execute(
+                "SELECT cash_balance FROM users_profile WHERE id = ?", (user_id,)
+            )
+        ).fetchone()
+        cash = float(cash_row["cash_balance"]) if cash_row else 0.0
+        raise InsufficientFundsError(f"needs {cost:.2f}, have {cash:.2f}")
+
+    position_row = await (
+        await conn.execute(
+            "SELECT id, quantity, avg_cost FROM positions "
+            "WHERE user_id = ? AND ticker = ?",
+            (user_id, ticker),
+        )
+    ).fetchone()
+
     if position_row is None:
-        await db.execute(
+        await conn.execute(
             "INSERT INTO positions (id, user_id, ticker, quantity, avg_cost, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (str(uuid.uuid4()), user_id, ticker, qty, price, now),
@@ -157,26 +173,42 @@ async def _apply_buy(
         new_avg = (
             position_row["quantity"] * position_row["avg_cost"] + qty * price
         ) / new_qty
-        await db.execute(
+        await conn.execute(
             "UPDATE positions SET quantity = ?, avg_cost = ?, updated_at = ? WHERE id = ?",
             (new_qty, new_avg, now, position_row["id"]),
         )
 
 
 async def _apply_sell(
-    db: Database, user_id: str, ticker: str, qty: float, price: float, position_row
+    conn: aiosqlite.Connection,
+    user_id: str,
+    ticker: str,
+    qty: float,
+    price: float,
+    now: str,
 ) -> None:
-    now = _utc_iso()
+    position_row = await (
+        await conn.execute(
+            "SELECT id, quantity FROM positions WHERE user_id = ? AND ticker = ?",
+            (user_id, ticker),
+        )
+    ).fetchone()
+    owned = position_row["quantity"] if position_row else 0.0
+    if qty > owned:
+        raise InsufficientSharesError(f"owns {owned}, tried to sell {qty}")
+
     proceeds = price * qty
-    await db.execute(
+    await conn.execute(
         "UPDATE users_profile SET cash_balance = cash_balance + ? WHERE id = ?",
         (proceeds, user_id),
     )
-    new_qty = position_row["quantity"] - qty
+    new_qty = owned - qty
     if new_qty <= 1e-9:
-        await db.execute("DELETE FROM positions WHERE id = ?", (position_row["id"],))
+        await conn.execute(
+            "DELETE FROM positions WHERE id = ?", (position_row["id"],)
+        )
     else:
-        await db.execute(
+        await conn.execute(
             "UPDATE positions SET quantity = ?, updated_at = ? WHERE id = ?",
             (new_qty, now, position_row["id"]),
         )

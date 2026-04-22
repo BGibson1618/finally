@@ -43,13 +43,26 @@ def test_smoke_full_flow(client: TestClient) -> None:
     state = client.get("/api/portfolio").json()
     assert state["cash_balance"] == 10_000.0
 
-    # Chat-driven trade
-    chat = client.post("/api/chat", json={"message": "buy 1 AAPL"}).json()
+    # Chat proposes the trade, doesn't execute it yet
+    r1 = client.post("/api/chat", json={"message": "buy 1 AAPL"}).json()
+    assert r1["executed_actions"] == []
+    proposed = r1["proposed_actions"]
+    assert len(proposed) == 1
+
+    # Portfolio unchanged pre-confirmation
+    state = client.get("/api/portfolio").json()
+    assert state["cash_balance"] == 10_000.0
+
+    # User confirms; server executes
+    r2 = client.post(
+        "/api/chat",
+        json={"message": "confirm", "confirm_actions": proposed},
+    ).json()
     assert any(
-        a["kind"] == "trade" and a["status"] == "ok" for a in chat["executed_actions"]
+        a["kind"] == "trade" and a["status"] == "ok" for a in r2["executed_actions"]
     )
 
-    # Portfolio reflects the trade
+    # Portfolio now reflects the trade
     state = client.get("/api/portfolio").json()
     assert state["cash_balance"] < 10_000.0
     assert any(p["ticker"] == "AAPL" for p in state["positions"])
